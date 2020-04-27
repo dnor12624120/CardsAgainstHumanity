@@ -18,12 +18,12 @@ class Interface
 
 		void run();
 		
-		void notify(const std::string& message);
+		void printMessage(const std::string& message);
 		std::string requestInput();
 	private:
-		void getInput(std::string& input);
-		void parseInput(const std::string& input, std::string& command, std::vector<std::string>& arguments);
-		void validateInput(const std::string& command, const std::vector<std::string>& arguments);
+	     void readInputFromConsole(std::string& input);
+		 void parseInput(const std::string& input, std::string& command, std::vector<std::string>& arguments);
+		 void validateInput(const std::string& command, const std::vector<std::string>& arguments);
 
 		void setupCommands();
 
@@ -32,9 +32,9 @@ class Interface
 		void setUsername(const std::vector<std::string>& arguments);
 		void connectToServer(const std::vector<std::string>& arguments);
 
-		bool m_running;
-		bool m_connected;
+		bool running;
+		bool connected;
 
-		std::map<std::string, Command> m_commands;
-		std::unique_ptr<Client> m_client;
+		std::map<std::string, Command> commands;
+		std::unique_ptr<Client> client;
 };

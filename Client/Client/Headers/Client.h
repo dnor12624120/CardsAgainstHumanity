@@ -19,7 +19,7 @@ class Client
 		Client(Interface& userInterface);
 		~Client();
 
-		inline void setUsername(const std::string& username) { m_username = username; }
+		inline void setUsername(const std::string& username) { this->username = username; }
 
 		void connectToServer();
 		void sendUsername();
@@ -28,14 +28,13 @@ class Client
 		void receiveNumOfAnswers();
 		void start();
 	private:
-		void initNetwork();
 		void loadSettings();
 		
 		void receivePlayerID();
 		void receiveTsarIndex();
-		void receiveQuestion();
-		void receiveAnswers();
-		void receiveAnswerChoices();
+		void receivePrompt();
+		void receiveStatementCards();
+		void receiveStatementCardChoices();
 		void receiveTsarChoice();
 		void receiveServerConfirmation();
 
@@ -45,67 +44,77 @@ class Client
 		void send();
 		void receive();
 
+		void sendChoice_();
+		void sendTsarChoice_();
+		void sendConfirmation_();
+		void resetData_();
+
+		void receiveData_(int i);
+		void receiveStatementCardChoices_();
+		void receiveTsarChoice_();
+		void receiveConfirmation_();
+
 		void displayInformation(int round);
 		void displayChoices();
 		void displayTsarChoice();
 		void confirmNextRound();
-		void resetFlags();
+		void resetData();
 
-		std::shared_ptr<NetworkManager> m_networkManager;
-		std::string m_username;
-		std::string m_serverIP;
-		unsigned short m_serverPort;
+		std::shared_ptr<WSAManager> wsaManager;
+		std::string username;
+		std::string serverIP;
+		unsigned short serverPort;
 
-		const std::string m_settingsFilepath;
+		const std::string settingsFilepath;
 
-		Socket m_socket;
+		Socket socket;
 
-		Interface& m_userInterface;
+		Interface& userInterface;
 
-		int m_playerID;
-		int m_numOfRounds;
-		std::vector<std::pair<Score, std::string>> m_playerList;
+		int playerID;
+		int numOfRounds;
+		std::vector<std::pair<Score, std::string>> playerList;
 
-		std::thread m_sendThread;
-		std::thread m_receiveThread;
+		std::thread sendThread;
+		std::thread receiveThread;
 
-		int m_tsarIndex;
-		int m_questionNumOfBlanks;
-		int m_tsarChoiceIndex;
-		int m_winnerIndex;
-		std::vector<std::vector<std::string>> m_answerChoices;
-		std::string m_question;
-		std::vector<std::string> m_answers;
+		int tsarIndex;
+		int promptNumOfBlanks;
+		int tsarChoiceIndex;
+		int winnerIndex;
+		std::vector<std::vector<std::string>> statementCardChoices;
+		std::string prompt;
+		std::vector<std::string> statementCards;
 
-		bool m_doneReceivingData;
-		std::condition_variable m_dataReceived;
-		std::mutex m_dataReceivedMutex;
+		bool doneReceivingData;
+		std::condition_variable dataReceived;
+		std::mutex dataReceivedMutex;
 
-		bool m_sentChoice;
-		std::condition_variable m_choiceSent;
-		std::mutex m_choiceSentMutex;
+		bool sentChoice;
+		std::condition_variable choiceSent;
+		std::mutex choiceSentMutex;
 
-		bool m_receivedChoices;
-		std::condition_variable m_choicesReceived;
-		std::mutex m_choicesReceivedMutex;
+		bool receivedChoices;
+		std::condition_variable choicesReceived;
+		std::mutex choicesReceivedMutex;
 
 		bool m_sentTsarChoice;
 		std::condition_variable m_tsarChoiceSent;
 		std::mutex m_tsarChoiceSentMutex;
 
-		bool m_receivedTsarChoice;
-		std::condition_variable m_tsarChoiceReceived;
-		std::mutex m_tsarChoiceReceivedMutex;
+		bool receivedTsarChoice;
+		std::condition_variable tsarChoiceReceived;
+		std::mutex tsarChoiceReceivedMutex;
 
-		bool m_sentConfirmation;
-		std::condition_variable m_confirmationSent;
-		std::mutex m_confirmationSentMutex;
+		bool sentConfirmation;
+		std::condition_variable confirmationSent;
+		std::mutex confirmationSentMutex;
 
-		bool m_receivedConfirmation;
-		std::condition_variable m_confirmationReceived;
-		std::mutex m_confirmationReceivedMutex;
+		bool receivedConfirmation;
+		std::condition_variable confirmationReceived;
+		std::mutex confirmationReceivedMutex;
 
-		bool m_flagsReset;
-		std::condition_variable m_resetFlags;
-		std::mutex m_resetFlagsMutex;
+		bool flagsReset;
+		std::condition_variable resetFlags;
+		std::mutex resetFlagsMutex;
 };

@@ -4,13 +4,13 @@
 #include <sstream>
 
 Interface::Interface():
-	m_client(std::make_unique<Client>(*this)),
-	m_connected(false)
+	client{ std::make_unique<Client>(*this) },
+	connected{ false }
 {
 	setupCommands();
 }
 
-void Interface::getInput(std::string& input)
+void Interface::readInputFromConsole(std::string& input)
 {
 	std::cout << "> ";
 	std::getline(std::cin, input);
@@ -18,20 +18,20 @@ void Interface::getInput(std::string& input)
 
 void Interface::run()
 {
-	m_running = true;
-	while (m_running)
+	running = true;
+	while (running)
 	{
 		std::string input;
 		std::string command;
 		std::vector<std::string> arguments;
 		try
 		{
-			getInput(input);
+			readInputFromConsole(input);
 			if (input.length())
 			{
 				parseInput(input, command, arguments);
 				validateInput(command, arguments);
-				m_commands[command](arguments);
+				commands[command](arguments);
 			}
 		}
 		catch (InterfaceException& exception)
@@ -42,14 +42,14 @@ void Interface::run()
 		{
 			std::cout << exception.what() << '\n';
 		}
-		catch (WNException& exception)
+		catch (WinSockException& exception)
 		{
 			std::cout << "Failed to connect to server: (" << exception.what() << ")\n";
 		}
 	}
 }
 
-void Interface::notify(const std::string& message)
+void Interface::printMessage(const std::string& message)
 {
 	std::cout << message << '\n';
 }
@@ -82,7 +82,7 @@ void Interface::validateInput(const std::string& command, const std::vector<std:
 	{
 		throw InterfaceException("No command entered!");
 	}
-	if (m_commands.find(command) == m_commands.end())
+	if (commands.find(command) == commands.end())
 	{
 		throw InterfaceException("Invalid command!");
 	}
@@ -90,15 +90,15 @@ void Interface::validateInput(const std::string& command, const std::vector<std:
 
 void Interface::setupCommands()
 {
-	m_commands["exit"] = Command(InterfaceCommand(std::bind(&Interface::exit, this, std::placeholders::_1)), "exit", 0);
-	m_commands["echo"] = Command(InterfaceCommand(std::bind(&Interface::echo, this, std::placeholders::_1)), "echo", cmd::UNLIMITED_ARGUMENTS);
-	m_commands["setuser"] = Command(InterfaceCommand(std::bind(&Interface::setUsername, this, std::placeholders::_1)), "setuser", 1);
-	m_commands["connect"] = Command(InterfaceCommand(std::bind(&Interface::connectToServer, this, std::placeholders::_1)), "connect", 0);
+	commands["exit"] = Command(InterfaceCommand(std::bind(&Interface::exit, this, std::placeholders::_1)), "exit", 0);
+	commands["echo"] = Command(InterfaceCommand(std::bind(&Interface::echo, this, std::placeholders::_1)), "echo", cmd::UNLIMITED_ARGUMENTS);
+	commands["setuser"] = Command(InterfaceCommand(std::bind(&Interface::setUsername, this, std::placeholders::_1)), "setuser", 1);
+	commands["connect"] = Command(InterfaceCommand(std::bind(&Interface::connectToServer, this, std::placeholders::_1)), "connect", 0);
 }
 
 void Interface::exit(const std::vector<std::string>& arguments)
 {
-	m_running = false;
+	running = false;
 }
 
 void Interface::echo(const std::vector<std::string>& arguments)
@@ -112,17 +112,17 @@ void Interface::echo(const std::vector<std::string>& arguments)
 
 void Interface::setUsername(const std::vector<std::string>& arguments)
 {
-	m_client->setUsername(arguments[0]);
+	client->setUsername(arguments[0]);
 }
 
 void Interface::connectToServer(const std::vector<std::string>& arguments)
 {
-	if (m_connected)
+	if (connected)
 	{
 		throw InterfaceException("Already connected");
 	}
-	m_client->connectToServer();
-	m_connected = true;
-	m_running = false;
-	m_client->start();
+	client->connectToServer();
+	connected = true;
+	running = false;
+	client->start();
 }
