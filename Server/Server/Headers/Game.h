@@ -1,42 +1,110 @@
 #pragma once
 
+#include "FileRepository.h"
+#include "Prompt.h"
+#include "StatementCard.h"
+#include "GameDataManager.h"
+
 #include <string>
 #include <vector>
 #include <algorithm>
 #include <ctime>
 
-#include "AnswerRepository.h"
-#include "QuestionRepository.h"
+using PlayerIndex = int;
+using StatementText = std::string;
+
+class GameConfiguration
+{
+	public: 
+		GameConfiguration() = default;
+		GameConfiguration(int numOfPlayers,
+						  int numOfRounds,
+						  int numOfStatementCards):
+			numOfPlayers{ numOfPlayers },
+			numOfRounds{ numOfRounds },
+			numOfStatementCards{ numOfStatementCards }
+		{
+
+		}
+		
+		int numOfPlayers;
+		int numOfRounds;
+		int numOfStatementCards;
+};
+
+class GameState
+{
+	public:
+		GameState() = default;
+		GameState(const GameConfiguration& configuration)
+		{
+			statementCards.resize(configuration.numOfPlayers);
+			usedStatementCards.resize(configuration.numOfPlayers);
+			for (auto& playerStatementCards : statementCards)
+			{
+				playerStatementCards.resize(configuration.numOfStatementCards);
+			}
+			for (auto& playerStatementCards : usedStatementCards)
+			{
+				playerStatementCards.resize(configuration.numOfStatementCards);
+				std::fill(playerStatementCards.begin(), playerStatementCards.end(), true);
+			}
+		}
+
+		int currentTsarIndex;
+		Prompt currentPrompt;
+		std::vector<std::vector<StatementText>> statementCards;
+		std::vector<std::vector<bool>> usedStatementCards;
+};
 
 class Game
 {
 	public:
-		Game(const std::string& answerRepositoryFilepath, const std::string& questionRepositoryFilepath,
-		 int numOfPlayers, int numOfAnswers, int numOfRounds);
-		void generateData();
+		Game(std::unique_ptr<Repository<Prompt>> promptRepository,
+			 std::unique_ptr<Repository<StatementCard>> statementCardRepository,
+			 std::unique_ptr<GameDataManager> dataManager,
+			 const GameConfiguration& configuration);
 
-		inline void setNumOfRounds(int numOfRounds) { m_numOfRounds = numOfRounds; }
-		inline void setUsedAnswer(int playerIndex, int answerIndex) { m_usedAnswers[playerIndex][answerIndex] = true; }
-		inline const int getNumOfPlayers() const { return m_numOfPlayers; }
-		inline const int getNumOfRounds() const { return m_numOfRounds; }
-		inline const int getNumOfAnswers() const { return m_numOfAnswers; }
+		void generateRoundData();
 
-		inline const int& getTsarIndex() const { return m_tsarIndex; }
-		inline const Question& getQuestion() const { return m_question; }
-		inline const std::vector<std::pair<int, std::string>>& getAnswers(int playerIndex) const { return m_answers[playerIndex]; }
+		inline void setNumOfRounds(int numOfRounds) 
+		{
+			configuration.numOfRounds = numOfRounds;
+		}
+
+		inline void setPlayerStatementCardAsUsed(int playerIndex, int answerIndex) 
+		{
+			state.usedStatementCards[playerIndex][answerIndex] = true; 
+		}
+
+		inline const GameConfiguration& getGameConfiguration() 
+		{
+			return configuration;
+		}
+
+		inline const GameState& getGameState()
+		{
+			return state;
+		}
+
+		inline const int& getCurrentTsarIndex() const
+		{
+			return state.currentTsarIndex; 
+		}
+
+		inline const Prompt& getCurrentPrompt() const
+		{
+			return state.currentPrompt; 
+		}
+
+		inline const std::vector<StatementText>& getStatementCardsOfPlayer(int playerIndex) const
+		{
+			return state.statementCards[playerIndex]; 
+		}
 	private:
-		void generateTsarIndex();
-		void generateQuestion();
-		void generateAnswer(int playerIndex);
-
-		AnswerRepository m_answerRepository;
-		QuestionRepository m_questionRepository;
-		int m_numOfPlayers;
-		int m_numOfRounds;
-		int m_numOfAnswers;
-
-		int m_tsarIndex;
-		Question m_question;
-		std::vector<std::vector<std::pair<int, std::string>>> m_answers;
-		std::vector<std::vector<bool>> m_usedAnswers;
+		std::unique_ptr<Repository<Prompt>> promptRepository;
+		std::unique_ptr<Repository<StatementCard>> statementCardRepository;
+		std::unique_ptr<GameDataManager> dataManager;
+		GameConfiguration configuration;
+		GameState state;
 };

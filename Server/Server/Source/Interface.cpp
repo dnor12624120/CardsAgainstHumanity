@@ -5,47 +5,52 @@
 #include <sstream>
 
 Interface::Interface():
-	m_server(std::make_unique<Server>(*this))
+	server{ std::make_unique<Server>(*this, "127.0.0.1", 11011, "settings.cfg") }
 {
 	setupCommands();
 }
 
 void Interface::run()
 {
-	m_takingInput = true;
-	while (m_takingInput)
+	takingInput = true;
+	while (takingInput)
 	{
-		std::string input;
+		std::string streamInput;
 		std::string command;
-		std::vector<std::string> arguments;
+		std::vector<std::string> commandArguments;
 		try
 		{
-			getInput(input);
-			if (input.length())
+			readInputFromConsole(streamInput);
+			if (!isInputEmpty(streamInput))
 			{
-				parseInput(input, command, arguments);
-				validateInput(command, arguments);
-				m_commands[command](arguments);
+				parseInput(streamInput, command, commandArguments);
+				validateInput(command, commandArguments);
+				consoleCommands[command](commandArguments);
 			}
 		}
 		catch (InterfaceException& exception)
 		{
-			std::cout << exception.what() << '\n';
+			printMessage(exception.what());
 		}
 		catch (CommandException& exception)
 		{
-			std::cout << exception.what() << '\n';
+			printMessage(exception.what());
 		}
 	}
 }
 
-void Interface::notify(const std::string& message) 
+void Interface::printMessage(const std::string& message) 
 {
-	std::lock_guard<std::mutex> guard(m_consoleGuard);
+	std::lock_guard<std::mutex> guard(consoleGuard);
 	std::cout << message << '\n';
 }
 
-void Interface::getInput(std::string& input)
+bool Interface::isInputEmpty(const std::string& input)
+{
+	return input.length() == 0;
+}
+
+void Interface::readInputFromConsole(std::string& input)
 {
 	std::cout << ">";
 	std::getline(std::cin, input);
@@ -70,7 +75,7 @@ void Interface::validateInput(const std::string& command, const std::vector<std:
 	{
 		throw InterfaceException("No command entered!");
 	}
-	if (m_commands.find(command) == m_commands.end())
+	if (consoleCommands.find(command) == consoleCommands.end())
 	{
 		throw InterfaceException("Invalid command!");
 	}
@@ -78,27 +83,24 @@ void Interface::validateInput(const std::string& command, const std::vector<std:
 
 void Interface::setupCommands()
 {
-	m_commands["exit"] = Command(InterfaceCommand(std::bind(&Interface::exit, this, std::placeholders::_1)), "exit", 0);
-	m_commands["echo"] = Command(InterfaceCommand(std::bind(&Interface::echo, this, std::placeholders::_1)), "echo", cmd::UNLIMITED_ARGUMENTS);
-	m_commands["start"] = Command(InterfaceCommand(std::bind(&Interface::startServer, this, std::placeholders::_1)), "start", 0);
+	consoleCommands["exit"] = Command(InterfaceCommand(std::bind(&Interface::exit, this, std::placeholders::_1)), "exit", 0);
+	consoleCommands["echo"] = Command(InterfaceCommand(std::bind(&Interface::echo, this, std::placeholders::_1)), "echo", cmd::UNLIMITED_ARGUMENTS);
+	consoleCommands["start"] = Command(InterfaceCommand(std::bind(&Interface::startServer, this, std::placeholders::_1)), "start", 0);
 }
 
 void Interface::exit(const std::vector<std::string>& arguments)
 {
-	m_takingInput = false;
+	takingInput = false;
 }
 
 void Interface::echo(const std::vector<std::string>& arguments)
 {
-	for (int i = 0; i < arguments.size(); i++)
-	{
-		std::cout << arguments[i] << ' ';
-	}
+	std::for_each(arguments.begin(), arguments.end(), [](const std::string& argument) { std::cout << argument << ' '; });
 	std::cout << '\n';
 }
 
 void Interface::startServer(const std::vector<std::string>& arguments)
 {
-	m_server->start();
-	m_takingInput = false;
+	server->start();
+	takingInput = false;
 }

@@ -3,6 +3,7 @@
 #include "Command.h"
 #include "Server.h"
 
+#include <istream>
 #include <map>
 #include <mutex>
 #include <string>
@@ -16,11 +17,11 @@ class Interface
 		Interface();
 
 		void run();
-		void notify(const std::string& message);
+		void printMessage(const std::string& message);
 	private:
 		void setupCommands();
 
-		void getInput(std::string& input);
+		void readInputFromConsole(std::string& input);
 		void parseInput(const std::string& input, std::string& command, std::vector<std::string>& arguments);
 		void validateInput(const std::string& command, const std::vector<std::string>& arguments);
 
@@ -28,9 +29,15 @@ class Interface
 		void echo(const std::vector<std::string>& arguments);
 		void startServer(const std::vector<std::string>& arguments);
 
-		bool m_takingInput;
-		std::map<std::string, Command> m_commands;
-		std::mutex m_consoleGuard;
-		std::unique_ptr<Server> m_server;
+		bool isInputEmpty(const std::string& input);
+
+
+		bool takingInput;
+
+		std::map<std::string, Command> consoleCommands;
+
+		std::mutex consoleGuard;
+
+		std::unique_ptr<Server> server;
 
 };

@@ -4,60 +4,40 @@
 #include <ctime>
 #include <utility>
 
-Game::Game(const std::string& answerRepositoryFilepath, const std::string& questionRepositoryFilepath,
-	 int numOfPlayers, int numOfAnswers, int numOfRounds) :
-	m_answerRepository(AnswerRepository(answerRepositoryFilepath)),
-	m_questionRepository(QuestionRepository(questionRepositoryFilepath)),
-	m_numOfPlayers(numOfPlayers),
-	m_numOfAnswers(numOfAnswers),
-	m_numOfRounds(numOfRounds)
+Game::Game(std::unique_ptr<Repository<Prompt>> promptRepository,
+		   std::unique_ptr<Repository<StatementCard>> statementCardRepository,
+		   std::unique_ptr<GameDataManager> dataManager,
+		   const GameConfiguration& configuration) :
+	promptRepository{ std::move(promptRepository) },
+	statementCardRepository{ std::move(statementCardRepository) },
+	dataManager{ std::move(dataManager) },
+	configuration{ configuration },
+	state { GameState(configuration) }
 {
-	srand(time(0));
-	m_answers.resize(m_numOfPlayers);
-	m_usedAnswers.resize(m_numOfPlayers);
-	for (auto& answers : m_answers)
-	{
-		answers.resize(numOfAnswers);
-	}
-	for (auto& usedAnswers : m_usedAnswers)
-	{
-		usedAnswers.resize(numOfAnswers);
-		std::fill(usedAnswers.begin(), usedAnswers.end(), true);
-	}
+	
 }
 
-void Game::generateData()
+void Game::generateRoundData()
 {
-	generateTsarIndex();
-	generateQuestion();
-	for (int i = 0; i < m_numOfPlayers; i++)
+	// generate a tsar index
+	state.currentTsarIndex = dataManager->generatePlayerIndex(configuration.numOfPlayers);
+	// generate a new prompt
+	int promptIndex = dataManager->generateUniqueRepositoryIndex("prompt", promptRepository->size());
+	state.currentPrompt = promptRepository->getObject(promptIndex);
+	// generate new statement cards in the place of the ones that have been used for all players
+	for (int playerIndex = 0; playerIndex < configuration.numOfPlayers; playerIndex++)
 	{
-		if (i != m_tsarIndex)
+		if (playerIndex != state.currentTsarIndex) // don't need new cards for tsar
 		{
-			generateAnswer(i);
-		}
-	}
-}
-
-void Game::generateTsarIndex()
-{
-	m_tsarIndex = 0;
-	//m_tsarIndex = rand() % m_numOfPlayers;
-}
-
-void Game::generateQuestion()
-{
-	m_question = m_questionRepository.getQuestion();
-}
-
-void Game::generateAnswer(int playerIndex)
-{
-	for (int i = 0; i < m_numOfAnswers; i++)
-	{
-		if (m_usedAnswers[playerIndex][i])
-		{
-			m_answers[playerIndex][i] = std::pair<int, std::string>(i, m_answerRepository.getAnswer());
-			m_usedAnswers[playerIndex][i] = false;
+			for (int usedCardFlagIndex = 0; usedCardFlagIndex < state.usedStatementCards[playerIndex].size(); usedCardFlagIndex++)
+			{
+				if (state.usedStatementCards[playerIndex][usedCardFlagIndex])
+				{
+					int cardIndex = dataManager->generateUniqueRepositoryIndex("statementCard", statementCardRepository->size());
+					state.usedStatementCards[playerIndex][usedCardFlagIndex] = false;
+					state.statementCards[playerIndex][usedCardFlagIndex] = statementCardRepository->getObject(cardIndex).text;
+				}
+			}
 		}
 	}
 }

@@ -1,5 +1,14 @@
 #include "Interface.h"
 #include "Server.h"
+#include "FileRepository.h"
+#include "GameDataManager.h"
+#include "StdRandGenerator.h"
+#include "Repository.h"
+#include "WNetwok.h"
+#include "StatementCard.h"
+#include "GeneratorStrategy.h"
+#include "Prompt.h"
+#include "Game.h"
 
 #include <algorithm>
 #include <ctime>
@@ -7,22 +16,24 @@
 #include <iostream>
 #include <random>
 
-Server::Server(Interface& userInterface):
-	m_networkManager(NetworkManager::GetInstance()),
-	m_listening(Socket(Family_IPv4, SocketType_Stream, Protocol_TCP)),
-	m_settingsFilepath("settings.cfg"),
-	m_userInterface(userInterface),
-	m_doneGenerating(false),
-	m_dataSentCounter(0),
-	m_receivedAnswerChoicesCounter(0),
-	m_shuffledAnswers(false),
-	m_sentTsarChoiceCounter(0),
-	m_sentServerConfirmationCounter(0),
-	m_resetFlags(false)
+Server::Server(Interface& userInterface, const std::string& ip, short port, const std::string& settingsFilepath):
+	wsaManager{ WSAManager::GetInstance() },
+	listening{ Socket(AF_INET, SOCK_STREAM, IPPROTO_TCP) },
+	settingsFilepath{ settingsFilepath },
+	userInterface{ userInterface },
+	doneGenerating{ false },
+	dataSentCounter{ 0 },
+	receivedStatementCardChoicesCounter{ 0 },
+	shuffledStatementCards{ false },
+	sentStatementCardChoicesCounter{ 0 },
+	receivedTsarStatementCard{ false },
+	sentTsarStatementCardChoiceCounter{ 0 },
+	sentServerConfirmationCounter{ 0 },
+	receivedNextRoundConfirmationCounter{ 0 },
+	resetFlags{ false }
 {
-	initNetwork();
 	loadSettings();
-	m_listening.Bind(IPv4Address(m_serverIP, m_serverPort));
+	listening.Bind(IPv4Address(ip, port));
 }
 
 Server::~Server()
@@ -30,251 +41,168 @@ Server::~Server()
 	
 }
 
-void Server::initNetwork()
-{
-	try
-	{
-		m_networkManager->Initialize(2, 2);
-		m_listening.Create();
-		m_userInterface.notify("WNetwork initialized successfully!");
-	}
-	catch (WNException& exception)
-	{
-		m_userInterface.notify(exception.what());
-	}
-}
-
 void Server::loadSettings()
 {
-	std::ifstream settingsFile(m_settingsFilepath);
+	std::ifstream settingsFile(settingsFilepath);
 	std::string settingType;
-	std::string answerRepoFilepath;
-	std::string questionRepoFilepath;
+	std::string statementCardRepoFilepath;
+	std::string promptRepoFilepath;
 	int numOfPlayers;
 	int numOfRounds;
-	int numOfAnswers;
+	int numOfStatementCards;
 
-	settingsFile >> settingType >> m_serverIP;
-	settingsFile >> settingType >> m_serverPort;
 	settingsFile >> settingType >> numOfPlayers;
 	settingsFile >> settingType >> numOfRounds;
-	settingsFile >> settingType >> numOfAnswers;
-	settingsFile >> settingType >> answerRepoFilepath;
-	settingsFile >> settingType >> questionRepoFilepath;
+	settingsFile >> settingType >> numOfStatementCards;
+	settingsFile >> settingType >> statementCardRepoFilepath;
+	settingsFile >> settingType >> promptRepoFilepath;
 
-	m_userInterface.notify("IP loaded from " + m_settingsFilepath + ": " + m_serverIP);
-	m_userInterface.notify("Port loaded from " + m_settingsFilepath + ": " + std::to_string(m_serverPort));
-	m_userInterface.notify("Game initialized with " + std::to_string(numOfPlayers) + " players, playing for " + std::to_string(numOfRounds) + " rounds");
-	m_userInterface.notify("Read answers from " + answerRepoFilepath);
-	m_userInterface.notify("Read questions from " + questionRepoFilepath);
+	userInterface.printMessage("Game initialized with " + std::to_string(numOfPlayers) + " players, playing for " + std::to_string(numOfRounds) + " rounds");
+	userInterface.printMessage("Read answers from " + statementCardRepoFilepath);
+	userInterface.printMessage("Read questions from " + promptRepoFilepath);
 
-	m_game = std::make_unique<Game>(answerRepoFilepath, questionRepoFilepath, numOfPlayers, numOfAnswers, numOfRounds);
+	std::unique_ptr<Repository<Prompt>> promptRepository = std::unique_ptr<Repository<Prompt>>(new FileRepository<Prompt>(promptRepoFilepath));
+	std::unique_ptr<Repository<StatementCard>> statementCardRepository =
+		std::unique_ptr<Repository<StatementCard>>(new FileRepository<StatementCard>(statementCardRepoFilepath));
+	std::unique_ptr<GeneratorStrategy> strategy = std::unique_ptr<StdRandGenerator>(new StdRandGenerator());
+	std::unique_ptr<GameDataManager> manager = std::unique_ptr<GameDataManager>(new GameDataManager(std::move(strategy)));
+	GameConfiguration configuration(numOfPlayers, numOfRounds, numOfStatementCards);
+
+	game = std::unique_ptr<Game>(new Game(std::move(promptRepository), std::move(statementCardRepository),
+										  std::move(manager), configuration));
 }
 
 void Server::start()
 {
-	m_listening.Listen();
+	listening.Listen();
 	acceptConnections();
-	m_userInterface.notify("All players connected. Starting game.");
-	for (int i = 0; i < m_clients.size(); i++)
+	userInterface.printMessage("All players connected. Starting game.");
+	for (int i = 0; i < clients.size(); i++)
 	{
-		sendPlayerID(i);
-		sendPlayerList(i);
-		sendNumOfRounds(i);
-		sendNumOfAnswers(i);
+		sendPlayerIDToClient(i);
+		sendPlayerListToClient(i);
+		sendNumOfRoundsToClient(i);
+		sendNumOfStatementCardsToClient(i);
 	}
-	m_masterThread = std::thread(&Server::gameLogic, this);
-	m_sendClientThreads.resize(m_clients.size());
-	m_receiveClientThreads.resize(m_clients.size());
-	for (int i = 0; i < m_clients.size(); i++)
+	masterThread = std::thread(&Server::gameLogic, this);
+	sendClientThreads.resize(clients.size());
+	receiveClientThreads.resize(clients.size());
+	for (int i = 0; i < clients.size(); i++)
 	{
-		m_sendClientThreads[i] = std::thread(&Server::sendClient, this, i);
-		m_receiveClientThreads[i] = std::thread(&Server::receiveClient, this, i);
+		sendClientThreads[i] = std::thread(&Server::sendClient, this, i);
+		receiveClientThreads[i] = std::thread(&Server::receiveClient, this, i);
 	}
-	for (int i = 0; i < m_clients.size(); i++)
+	for (int i = 0; i < clients.size(); i++)
 	{
-		m_sendClientThreads[i].join();
-		m_receiveClientThreads[i].join();
+		sendClientThreads[i].join();
+		receiveClientThreads[i].join();
 	}
-	m_masterThread.join();
-	auto winner = std::max_element(m_clients.begin(), m_clients.end(), [](auto& client1, auto& client2){ return client1->getScore() < client2->getScore(); });
-	m_userInterface.notify(winner->get()->getUsername());
+	masterThread.join();
+	auto winner = std::max_element(clients.begin(), clients.end(), [](auto& client1, auto& client2){ return client1->getScore() < client2->getScore(); });
+	userInterface.printMessage(winner->get()->getUsername());
+}
+
+void Server::acceptConnections()
+{
+	while (clients.size() < game->getGameConfiguration().numOfPlayers)
+	{
+		try
+		{
+			FileDescriptorSet set;
+			set.Zero();
+			set.AddSocket(listening);
+			set.SetTimeout(1, 0);
+			if (set.Select() > 0)
+			{
+				std::unique_ptr<Client> client(std::make_unique<Client>());
+				listening.Accept(client->getSocket(), client->getAddress());
+				receiveUsernameFromClient(client);
+				if (validUsername(client))
+				{
+					userInterface.printMessage(client->getUsername() + " joined!");
+					clients.emplace_back(std::move(client));
+				}
+			}
+		}
+		catch (WinSockException& exception)
+		{
+			userInterface.printMessage(exception.what());
+		}
+	}
 }
 
 void Server::gameLogic()
 {
-	for (int i = 0; i < m_game->getNumOfRounds(); i++)
+	srand(time(0));
+	for (int i = 0; i < game->getGameConfiguration().numOfRounds; i++)
 	{
-		m_userInterface.notify("Round #" + std::to_string(i + 1));
-		m_userInterface.notify("Tsar Index: " + std::to_string(m_tsarIndex));
-		m_game->generateData();
-		m_tsarIndex = m_game->getTsarIndex();
-		m_doneGenerating = true;
-		m_dataGenerated.notify_all();
-		std::unique_lock<std::mutex> receivedAnswerChoicesLock(m_receivedAnswerChoicesMutex);
-		m_resetFlags = false;
-		m_receivedAnswerChoices.wait(receivedAnswerChoicesLock, [this]{ return m_receivedAnswerChoicesCounter == m_clients.size() - 1; });
-		receivedAnswerChoicesLock.unlock();
-		std::random_shuffle(m_playerChoices.begin(), m_playerChoices.end(), [](int i){ return rand() % i; });
-		m_shuffledAnswers = true;
-		m_answersShuffled.notify_all();
-		std::unique_lock<std::mutex> serverConfirmationLock(m_serverConfirmationMutex);
-		m_serverConfirmationSent.wait(serverConfirmationLock, [this]{ return m_sentServerConfirmationCounter == m_clients.size(); });
-		serverConfirmationLock.unlock();
-		resetFlags();
-		m_resetFlags = true;
-		m_flagsReset.notify_all();
+		generateData_();
+		shuffleStatementCards_();
+		resetData_();
 	}
 }
 
 void Server::sendClient(int clientIndex)
 {
-	for (int i = 0; i < m_game->getNumOfRounds(); i++)
+	for (int i = 0; i < game->getGameConfiguration().numOfRounds; i++)
 	{
-		std::unique_lock<std::mutex> dataGeneratedLock(m_dataGeneratedMutex);
-		m_dataGenerated.wait(dataGeneratedLock, [this]{ return m_doneGenerating; });
-		dataGeneratedLock.unlock();
-		m_userInterface.notify("Sending data to " + m_clients[clientIndex]->getUsername());
-		sendTsarIndex(clientIndex);
-		sendQuestion(clientIndex);
-		if (clientIndex != m_tsarIndex)
-		{
-			sendAnswers(clientIndex);
-		}
-		m_dataSentCounter++;
-		m_dataSent.notify_all();
-		std::unique_lock<std::mutex> answersShuffledLock(m_answersShuffledMutex);
-		m_answersShuffled.wait(answersShuffledLock, [this]{ return m_shuffledAnswers; });
-		answersShuffledLock.unlock();
-		sendAnswerChoices(clientIndex);
-		m_userInterface.notify("Sent player choices to " + m_clients[clientIndex]->getUsername());
-		m_sentAnswerChoicesCounter++;
-		m_sentAnswerChoices.notify_all();
-		std::unique_lock<std::mutex> tsarChoiceReceivedLock(m_tsarChoiceReceivedMutex);
-		m_tsarChoiceReceived.wait(tsarChoiceReceivedLock, [this]{ return m_receivedTsarChoice; });
-		tsarChoiceReceivedLock.unlock();
-		sendTsarChoice(clientIndex);
-		m_userInterface.notify("Sent tsar choice to " + m_clients[clientIndex]->getUsername());
-		m_sentTsarChoiceCounter++;
-		m_tsarChoiceSent.notify_all();
-		std::unique_lock<std::mutex> receivedNextRoundConfirmationLock(m_receivedNextRoundConfirmationMutex);
-		m_receivedNextRoundConfirmation.wait(receivedNextRoundConfirmationLock, [this]{ return m_receivedNextRoundConfirmationCounter == m_clients.size(); });
-		receivedNextRoundConfirmationLock.unlock();
-		sendServerConfirmation(clientIndex);
-		m_sentServerConfirmationCounter++;
-		m_serverConfirmationSent.notify_all();
-		std::unique_lock<std::mutex> flagsResetLock(m_flagsResetMutex);
-		m_flagsReset.wait(flagsResetLock, [this]{ return m_resetFlags; });
-		flagsResetLock.unlock();
+		sendData_(clientIndex);
+		sendStatementCardChoices_(clientIndex);
+		sendTsarChoice_(clientIndex);
+		sendConfirmation_(clientIndex);
 	}
 }
 
 void Server::receiveClient(int clientIndex)
 {
-	for (int i = 0; i < m_game->getNumOfRounds(); i++)
+	for (int i = 0; i < game->getGameConfiguration().numOfRounds; i++)
 	{
-		std::unique_lock<std::mutex> dataSentLock(m_dataSentMutex);
-		m_dataSent.wait(dataSentLock, [this]{ return m_dataSentCounter == m_clients.size(); });
-		dataSentLock.unlock();
-		if (clientIndex != m_tsarIndex)
-		{
-			receiveAnswerChoice(clientIndex);
-			m_userInterface.notify("Received answer from " + m_clients[clientIndex]->getUsername());
-			m_receivedAnswerChoicesCounter++;
-			m_receivedAnswerChoices.notify_all();
-		}
-		else
-		{
-			std::unique_lock<std::mutex> sentAnswerChoicesLock(m_sentAnswerChoicesMutex);
-			m_sentAnswerChoices.wait(sentAnswerChoicesLock, [this]{ return m_sentAnswerChoicesCounter == m_clients.size(); });
-			sentAnswerChoicesLock.unlock();
-			receiveTsarChoice(clientIndex);
-			m_userInterface.notify("Received answer from tsar. - " + m_clients[clientIndex]->getUsername());
-			m_receivedTsarChoice = true;
-			m_tsarChoiceReceived.notify_all();
-		}
-		std::unique_lock<std::mutex> tsarChoiceSentLock(m_tsarChoiceSentMutex);
-		m_tsarChoiceSent.wait(tsarChoiceSentLock, [this]{ return m_sentTsarChoiceCounter == m_clients.size(); });
-		tsarChoiceSentLock.unlock();
-		receiveNextRoundConfirmation(clientIndex);
-		m_userInterface.notify("Received next round confirmation from " + m_clients[clientIndex]->getUsername());
-		m_receivedNextRoundConfirmationCounter++;
-		m_receivedNextRoundConfirmation.notify_all();
-		std::unique_lock<std::mutex> flagsResetLock(m_flagsResetMutex);
-		m_flagsReset.wait(flagsResetLock, [this]{ return m_resetFlags; });
-		flagsResetLock.unlock();
+		receiveData_(clientIndex);
+		receiveConfirmation_(clientIndex);
 	}
 }
 
-void Server::receiveAnswerChoice(int clientIndex)
+void Server::receiveStatementCardChoiceFromClient(int clientIndex)
 {
-	std::vector<std::string> answers;
-	for (int i = 0; i < m_game->getQuestion().m_numOfBlanks; i++)
+	int choiceIndex;
+	int statementCardTextLength;
+	std::string statementCard;
+	std::vector<std::string> statementCards;
+	for (int i = 0; i < game->getGameState().currentPrompt.numOfBlanks; i++)
 	{
-		int choiceIndex;
-		Socket socket = m_clients[clientIndex]->getSocket();
-		socket.RecieveAll(&choiceIndex, sizeof(int));
-		m_game->setUsedAnswer(clientIndex, choiceIndex);
-		int answerLength;
-		std::string answer;
-		socket.RecieveAll(&answerLength, sizeof(int));
-		answer.resize(answerLength);
-		socket.RecieveAll(&answer[0], answerLength);
-		answers.emplace_back(answer);
+		Socket socket = clients[clientIndex]->getSocket();
+		socket.Receive(&choiceIndex, sizeof(int));
+		game->setPlayerStatementCardAsUsed(clientIndex, choiceIndex);
+		socket.Receive(&statementCardTextLength, sizeof(int));
+		statementCard.resize(statementCardTextLength);
+		socket.Receive(&statementCard[0], statementCardTextLength);
+		statementCards.emplace_back(statementCard);
 	}
-	m_playerChoices.emplace_back(std::pair<int, std::vector<std::string>>(clientIndex, answers));
+	playerStatementCardChoices[clientIndex] = std::pair<int, std::vector<std::string>>(clientIndex, statementCards);
 }
 
-void Server::receiveTsarChoice(int clientIndex)
+void Server::receiveStatementCardChoiceFromTsar(int clientIndex)
 {
-	Socket socket = m_clients[clientIndex]->getSocket();
-	socket.RecieveAll(&m_tsarChoiceIndex, sizeof(int));
-	m_clients[m_playerChoices[m_tsarChoiceIndex].first]->incrementScore();
+	Socket socket = clients[clientIndex]->getSocket();
+	socket.Receive(&tsarChoiceIndex, sizeof(int));
+	clients[playerStatementCardChoices[tsarChoiceIndex].first]->incrementScore();
 }
 
-void Server::receiveNextRoundConfirmation(int clientIndex)
+void Server::receiveNextRoundConfirmationFromClient(int clientIndex)
 {
-	Socket socket = m_clients[clientIndex]->getSocket();
-	bool ready;
-	socket.RecieveAll(&ready, sizeof(bool));
+	Socket socket = clients[clientIndex]->getSocket();
+	bool ready; 
+	socket.Receive(&ready, sizeof(bool));
+	// we don't care what the bool is set to, just that its received 
 }
 
-void Server::acceptConnections()
-{
-	while (m_clients.size() < m_game->getNumOfPlayers())
-	{
-		try
-		{
-			FileDescriptorSet set;
-			set.Clear();
-			set.AddSocket(m_listening);
-			set.SetTimeout(1, 0);
-			if (set.Select() > 0)
-			{
-				std::unique_ptr<Client> client(std::make_unique<Client>());
-				m_listening.Accept(client->getSocket(), client->getAddress());
-				getUsername(client);
-				if (validUsername(client))
-				{
-					m_userInterface.notify(client->getUsername() + " joined!");
-					m_clients.emplace_back(std::move(client));
-				}
-			}
-		}
-		catch (WNException& exception)
-		{
-			m_userInterface.notify(exception.what());
-		}
-	}
-}
-
-void Server::getUsername(std::unique_ptr<Client>& client)
+void Server::receiveUsernameFromClient(std::unique_ptr<Client>& client)
 {
 	int usernameLength;
 	std::string username;
-	client->getSocket().RecieveAll(&usernameLength, sizeof(int));
+	client->getSocket().Receive(&usernameLength, sizeof(int));
 	username.resize(usernameLength);
-	client->getSocket().RecieveAll(&username[0], usernameLength);
+	client->getSocket().Receive(&username[0], usernameLength);
 	client->setUsername(username);
 }
 
@@ -283,141 +211,277 @@ bool Server::validUsername(std::unique_ptr<Client>& client)
 	auto socket = client->getSocket();
 	std::string username = client->getUsername();
 	bool valid = true;
-	for (int i = 0; i < m_clients.size() && valid; i++)
+	for (int i = 0; i < clients.size() && valid; i++)
 	{
-		std::string clientUsername = m_clients[i]->getUsername();
+		std::string clientUsername = clients[i]->getUsername();
 		if (clientUsername == username)
 		{
 			valid = false;
 		}
 	}
-	socket.SendAll(&valid, sizeof(bool));
+	socket.Send(&valid, sizeof(bool));
 	return valid;
 }
 
 std::vector<std::string> Server::getPlayerList() const
 {
 	std::vector<std::string> playerList;
-	for (auto& client : m_clients)
+	for (auto& client : clients)
 	{
 		playerList.emplace_back(client->getUsername());
 	}
 	return playerList;
 }
 
-void Server::sendPlayerID(int clientIndex)
+void Server::sendPlayerIDToClient(int clientIndex)
 {
-	Socket socket = m_clients[clientIndex]->getSocket();
-	socket.SendAll(&clientIndex, sizeof(int));
+	Socket socket = clients[clientIndex]->getSocket();
+	socket.Send(&clientIndex, sizeof(int));
 }
 
-void Server::sendPlayerList(int clientIndex)
+void Server::sendPlayerListToClient(int clientIndex)
 {
-	Socket socket = m_clients[clientIndex]->getSocket();
-	int numOfPlayers = m_clients.size();
-	socket.SendAll(&numOfPlayers, sizeof(int));
+	Socket socket = clients[clientIndex]->getSocket();
+	int numOfPlayers = clients.size();
+	socket.Send(&numOfPlayers, sizeof(int));
 	for (int i = 0; i < numOfPlayers; i++)
 	{
-		std::string username = m_clients[i]->getUsername();
+		std::string username = clients[i]->getUsername();
 		int usernameLength = username.length();
-		socket.SendAll(&usernameLength, sizeof(int));
-		socket.SendAll(&username[0], usernameLength);
+		socket.Send(&usernameLength, sizeof(int));
+		socket.Send(&username[0], usernameLength);
 	}
 }
 
-void Server::sendNumOfRounds(int clientIndex)
+void Server::sendNumOfRoundsToClient(int clientIndex)
 {
-	Socket socket = m_clients[clientIndex]->getSocket();
-	int numOfRounds = m_game->getNumOfRounds();
-	socket.SendAll(&numOfRounds, sizeof(int));
+	Socket socket = clients[clientIndex]->getSocket();
+	int numOfRounds = game->getGameConfiguration().numOfRounds;
+	socket.Send(&numOfRounds, sizeof(int));
 }
 
-void Server::sendNumOfAnswers(int clientIndex)
+void Server::sendNumOfStatementCardsToClient(int clientIndex)
 {
-	Socket socket = m_clients[clientIndex]->getSocket();
-	int numOfAnswers = m_game->getNumOfAnswers();
-	socket.SendAll(&numOfAnswers, sizeof(int));
+	Socket socket = clients[clientIndex]->getSocket();
+	int numOfStatementCards = game->getGameConfiguration().numOfStatementCards;
+	socket.Send(&numOfStatementCards, sizeof(int));
 }
 
-void Server::sendTsarIndex(int clientIndex)
+void Server::sendGeneratedTsarIndexToClient(int clientIndex)
 {
-	Socket socket = m_clients[clientIndex]->getSocket();
-	socket.SendAll(&m_tsarIndex, sizeof(int));
+	Socket socket = clients[clientIndex]->getSocket();
+	socket.Send(&(game->getGameState().currentTsarIndex), sizeof(int));
 }
 
-void Server::sendQuestion(int clientIndex)
+void Server::sendGeneratedPromptToClient(int clientIndex)
 {
-	Socket socket = m_clients[clientIndex]->getSocket();
-	int questionLength = m_game->getQuestion().m_text.length();
-	socket.SendAll(&questionLength, sizeof(int));
-	socket.SendAll(&m_game->getQuestion().m_text[0], questionLength);
-	socket.SendAll(&m_game->getQuestion().m_numOfBlanks, sizeof(int));
+	Socket socket = clients[clientIndex]->getSocket();
+	std::string prompt = game->getGameState().currentPrompt.text;
+	int promptNumOfBlanks = game->getGameState().currentPrompt.numOfBlanks;
+	int promptTextLength = prompt.length();
+	socket.Send(&promptTextLength, sizeof(int));
+	socket.Send(&prompt[0], promptTextLength);
+	socket.Send(&promptNumOfBlanks, sizeof(int));
 }
 
-void Server::sendAnswers(int clientIndex)
+void Server::sendGeneratedStatementCardsToClient(int clientIndex)
 {
-	Socket socket = m_clients[clientIndex]->getSocket();
-	auto answers = m_game->getAnswers(clientIndex);
-	int numOfAnswers = answers.size();
-	socket.SendAll(&numOfAnswers, sizeof(int));
-	for (int i = 0; i < answers.size(); i++)
+	Socket socket = clients[clientIndex]->getSocket();
+	auto statementCards = game->getGameState().statementCards[clientIndex];
+	int numOfStatementCards = statementCards.size();
+	socket.Send(&numOfStatementCards, sizeof(int));
+	for (int i = 0; i < statementCards.size(); i++)
 	{
-		int answerIndex = answers[i].first;
-		socket.SendAll(&answerIndex, sizeof(int));
-		int answerLength = answers[i].second.length();
-		socket.SendAll(&answerLength, sizeof(int));
-		socket.SendAll(&answers[i].second[0], answerLength);
+		int statementCardLength = statementCards[i].length();
+		socket.Send(&statementCardLength, sizeof(int));
+		socket.Send(&statementCards[i][0], statementCardLength);
 	}
 }
 
-void Server::sendAnswerChoices(int clientIndex)
+void Server::sendStatementCardChoicesToClient(int clientIndex)
 {
-	Socket socket = m_clients[clientIndex]->getSocket();
-	int numOfAnswers = m_clients.size() - 1;
-	socket.SendAll(&numOfAnswers, sizeof(int));
-	for (int i = 0; i < numOfAnswers; i++)
+	Socket socket = clients[clientIndex]->getSocket();
+	int numOfChoices = clients.size() - 1; // tsar doesn't choose
+	socket.Send(&numOfChoices, sizeof(int));
+	for (int i = 0; i < clients.size(); i++)
 	{
-		for (int j = 0; j < m_game->getQuestion().m_numOfBlanks; j++)
+		if (i != game->getGameState().currentTsarIndex)
 		{
-			try
+			for (int j = 0; j < game->getGameState().currentPrompt.numOfBlanks; j++)
 			{
-				int answerLength = m_playerChoices[i].second[j].length();
-				socket.SendAll(&answerLength, sizeof(int));
-				socket.SendAll(&m_playerChoices[i].second[j][0], answerLength);
-			}
-			catch (WNException& exception)
-			{
-				m_userInterface.notify(exception.what());
+				try
+				{
+					int statementCardTextLength = playerStatementCardChoices[i].second[j].length();
+					socket.Send(&statementCardTextLength, sizeof(int));
+					socket.Send(&playerStatementCardChoices[i].second[j][0], statementCardTextLength);
+				}
+				catch (WinSockException& exception)
+				{
+					userInterface.printMessage(exception.what());
+				}
 			}
 		}
 	}
 }
 
-void Server::sendTsarChoice(int clientIndex)
+void Server::sendTsarStatementCardChoiceToClient(int clientIndex)
 {
-	Socket socket = m_clients[clientIndex]->getSocket();
-	socket.SendAll(&m_playerChoices[m_tsarChoiceIndex].first, sizeof(int));
-	socket.SendAll(&m_tsarChoiceIndex, sizeof(int));
+	Socket socket = clients[clientIndex]->getSocket();
+	socket.Send(&playerStatementCardChoices[tsarChoiceIndex].first, sizeof(int));
+	socket.Send(&tsarChoiceIndex, sizeof(int));
 }
 
-void Server::sendServerConfirmation(int clientIndex)
+void Server::sendServerConfirmationToClient(int clientIndex)
 {
-	Socket socket = m_clients[clientIndex]->getSocket();
+	Socket socket = clients[clientIndex]->getSocket();
 	bool confirmation;
-	socket.SendAll(&confirmation, sizeof(bool));
+	socket.Send(&confirmation, sizeof(bool));
 }
 
-void Server::resetFlags()
+void Server::resetData()
 {
-	m_doneGenerating = false;
-	m_dataSentCounter = 0;
-	m_receivedAnswerChoicesCounter = 0;
-	m_shuffledAnswers = false;
-	m_sentAnswerChoicesCounter = 0;
-	m_receivedTsarChoice = false;
-	m_sentTsarChoiceCounter = 0;
-	m_sentServerConfirmationCounter = 0;
-	m_receivedNextRoundConfirmationCounter = 0;
-	m_resetFlags = false;
-	m_playerChoices.clear();
+	doneGenerating = false;
+	dataSentCounter = 0;
+	receivedStatementCardChoicesCounter = 0;
+	shuffledStatementCards = false;
+	sentStatementCardChoicesCounter = 0;
+	receivedTsarStatementCard = false;
+	sentTsarStatementCardChoiceCounter = 0;
+	sentServerConfirmationCounter = 0;
+	receivedNextRoundConfirmationCounter = 0;
+	resetFlags = false;
+	playerStatementCardChoices.clear();
+}
+
+void Server::generateData_()
+{
+	game->generateRoundData();
+	int tsarIndex = game->getGameState().currentTsarIndex;
+	userInterface.printMessage("Tsar Index: " + std::to_string(tsarIndex));
+	doneGenerating = true;
+	doneGeneratingCvar.notify_all();
+}
+
+void Server::shuffleStatementCards_()
+{
+	std::unique_lock<std::mutex> receivedStatementCardChoicesLock(receivedStatementCardChoicesMutex);
+	resetFlags = false;
+	receivedStatementCardChoicesCvar.wait(receivedStatementCardChoicesLock, [this]{ return receivedStatementCardChoicesCounter == clients.size() - 1; });
+	receivedStatementCardChoicesLock.unlock();
+
+	//std::random_shuffle(playerStatementCardChoices.begin(), playerStatementCardChoices.end(), [](int i){ return rand() % i; });
+	shuffledStatementCards = true;
+	shuffledStatementCardsCvar.notify_all();
+}
+
+void Server::resetData_()
+{
+	std::unique_lock<std::mutex> sentServerConfirmationLock(sentServerConfirmationMutex);
+	sentServerConfirmationCvar.wait(sentServerConfirmationLock, [this]{ return sentServerConfirmationCounter == clients.size(); });
+	sentServerConfirmationLock.unlock();
+
+	resetData();
+	resetFlags = true;
+	resetFlagsCvar.notify_all();
+}
+
+void Server::sendData_(int clientIndex)
+{
+	std::unique_lock<std::mutex> doneGeneratingLock(doneGeneratingMutex);
+	doneGeneratingCvar.wait(doneGeneratingLock, [this]{ return doneGenerating; });
+	doneGeneratingLock.unlock();
+
+	int tsarIndex = game->getGameState().currentTsarIndex;
+	userInterface.printMessage("Sending data to " + clients[clientIndex]->getUsername());
+	sendGeneratedTsarIndexToClient(clientIndex);
+	sendGeneratedPromptToClient(clientIndex);
+	if (clientIndex != tsarIndex)
+	{
+		sendGeneratedStatementCardsToClient(clientIndex);
+	}
+	dataSentCounter++;
+	dataSentCvar.notify_all();
+}
+
+void Server::sendStatementCardChoices_(int clientIndex)
+{
+	std::unique_lock<std::mutex> shuffledStatementCardsLock(shuffledStatementCardsMutex);
+	shuffledStatementCardsCvar.wait(shuffledStatementCardsLock, [this]{ return shuffledStatementCards; });
+	shuffledStatementCardsLock.unlock();
+
+	sendStatementCardChoicesToClient(clientIndex);
+	userInterface.printMessage("Sent player choices to " + clients[clientIndex]->getUsername());
+	sentStatementCardChoicesCounter++;
+	sentStatementCardChoicesCvar.notify_all();
+}
+
+void Server::sendTsarChoice_(int clientIndex)
+{
+	std::unique_lock<std::mutex> receivedTsarStatementCardLock(receivedTsarStatementCardMutex);
+	receivedTsarStatementCardCvar.wait(receivedTsarStatementCardLock, [this]{ return receivedTsarStatementCard; });
+	receivedTsarStatementCardLock.unlock();
+
+	sendTsarStatementCardChoiceToClient(clientIndex);
+	userInterface.printMessage("Sent tsar choice to " + clients[clientIndex]->getUsername());
+	sentTsarStatementCardChoiceCounter++;
+	sentTsarStatementCardChoiceCvar.notify_all();
+}
+
+void Server::sendConfirmation_(int clientIndex)
+{
+	std::unique_lock<std::mutex> receivedNextRoundConfirmationLock(receivedNextRoundConfirmationMutex);
+	receivedNextRoundConfirmationCvar.wait(receivedNextRoundConfirmationLock, [this]{ return receivedNextRoundConfirmationCounter == clients.size(); });
+	receivedNextRoundConfirmationLock.unlock();
+
+	sendServerConfirmationToClient(clientIndex);
+	sentServerConfirmationCounter++;
+	sentServerConfirmationCvar.notify_all();
+
+	std::unique_lock<std::mutex> resetFlagsLock(resetFlagsMutex);
+	resetFlagsCvar.wait(resetFlagsLock, [this]{ return resetFlags; });
+	resetFlagsLock.unlock();
+}
+
+void Server::receiveData_(int clientIndex)
+{
+	std::unique_lock<std::mutex> dataSentLock(dataSentMutex);
+	dataSentCvar.wait(dataSentLock, [this]{ return dataSentCounter == clients.size(); });
+	dataSentLock.unlock();
+
+	int tsarIndex = game->getGameState().currentTsarIndex;
+
+	if (clientIndex != tsarIndex)
+	{
+		receiveStatementCardChoiceFromClient(clientIndex);
+		userInterface.printMessage("Received answer from " + clients[clientIndex]->getUsername());
+		receivedStatementCardChoicesCounter++;
+		receivedStatementCardChoicesCvar.notify_all();
+	}
+	else
+	{
+		std::unique_lock<std::mutex> sentStatementCardChoicesLock(sentStatementCardChoicesMutex);
+		sentStatementCardChoicesCvar.wait(sentStatementCardChoicesLock, [this]{ return sentStatementCardChoicesCounter == clients.size(); });
+		sentStatementCardChoicesLock.unlock();
+
+		receiveStatementCardChoiceFromTsar(clientIndex);
+		userInterface.printMessage("Received answer from tsar. - " + clients[clientIndex]->getUsername());
+		receivedTsarStatementCard = true;
+		receivedTsarStatementCardCvar.notify_all();
+	}
+}
+
+void Server::receiveConfirmation_(int clientIndex)
+{
+	std::unique_lock<std::mutex> sentTsarStatementCardChoiceLock(sentTsarStatementCardChoiceMutex);
+	sentTsarStatementCardChoiceCvar.wait(sentTsarStatementCardChoiceLock, [this]{ return sentTsarStatementCardChoiceCounter == clients.size(); });
+	sentTsarStatementCardChoiceLock.unlock();
+
+	receiveNextRoundConfirmationFromClient(clientIndex);
+	userInterface.printMessage("Received next round confirmation from " + clients[clientIndex]->getUsername());
+	receivedNextRoundConfirmationCounter++;
+	receivedNextRoundConfirmationCvar.notify_all();
+
+	std::unique_lock<std::mutex> resetFlagsLock(resetFlagsMutex);
+	resetFlagsCvar.wait(resetFlagsLock, [this]{ return resetFlags; });
+	resetFlagsLock.unlock();
 }

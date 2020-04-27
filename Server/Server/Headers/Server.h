@@ -1,8 +1,10 @@
 #pragma once
 
 #include "Client.h"
+#include "CounterLock.h"
+#include "FlagLock.h"
 #include "Game.h"
-#include "WNetwork.h"
+#include "WNetwok.h"
 
 #include <atomic>
 #include <memory>
@@ -17,96 +19,102 @@ class Game;
 class Server
 {
 	public:
-		Server(Interface& userInterface);
+		Server(Interface& userInterface, const std::string& ip, short port, const std::string& settingsFilepath);
 		~Server();
 
 		void start();
 	private:
-		void initNetwork();
 		void loadSettings();
 
 		void acceptConnections();
-		void getUsername(std::unique_ptr<Client>& client);
+		void receiveUsernameFromClient(std::unique_ptr<Client>& client);
 		bool validUsername(std::unique_ptr<Client>& client);
 
 		std::vector<std::string> getPlayerList() const;
-		void sendPlayerID(int clientIndex);
-		void sendPlayerList(int clientIndex);
-		void sendNumOfRounds(int clientIndex);
-		void sendNumOfAnswers(int clientIndex);
-		void sendTsarIndex(int clientIndex);
-		void sendQuestion(int clientIndex);
-		void sendAnswers(int clientIndex);
-		void sendAnswerChoices(int clientIndex);
-		void sendTsarChoice(int clientIndex);
-		void sendServerConfirmation(int clientIndex);
+		void sendPlayerIDToClient(int clientIndex);
+		void sendPlayerListToClient(int clientIndex);
+		void sendNumOfRoundsToClient(int clientIndex);
+		void sendNumOfStatementCardsToClient(int clientIndex);
+		void sendGeneratedTsarIndexToClient(int clientIndex);
+		void sendGeneratedPromptToClient(int clientIndex);
+		void sendGeneratedStatementCardsToClient(int clientIndex);
+		void sendStatementCardChoicesToClient(int clientIndex);
+		void sendTsarStatementCardChoiceToClient(int clientIndex);
+		void sendServerConfirmationToClient(int clientIndex);
 
-		void receiveAnswerChoice(int clientIndex);
-		void receiveTsarChoice(int clientIndex);
-		void receiveNextRoundConfirmation(int clientIndex);
+		void receiveStatementCardChoiceFromClient(int clientIndex);
+		void receiveStatementCardChoiceFromTsar(int clientIndex);
+		void receiveNextRoundConfirmationFromClient(int clientIndex);
 
 		void gameLogic();
 		void sendClient(int clientIndex);
 		void receiveClient(int clientIndex);
-		void resetFlags();
+		void resetData();
 
-		std::shared_ptr<NetworkManager> m_networkManager;
-		Socket m_listening;
-		std::string m_serverIP;
-		unsigned short m_serverPort;
+		void generateData_();
+		void shuffleStatementCards_();
+		void resetData_();
 
-		const std::string m_settingsFilepath;
+		void sendData_(int clientIndex);
+		void sendStatementCardChoices_(int clientIndex);
+		void sendTsarChoice_(int clientIndex);
+		void sendConfirmation_(int clientIndex);
 
-		std::vector<std::unique_ptr<Client>> m_clients;
-		std::vector<std::pair<int, std::vector<std::string>>> m_playerChoices;
-		int m_tsarChoiceIndex;
+		void receiveData_(int clientIndex);
+		void receiveConfirmation_(int clientIndex);
 
-		std::unique_ptr<Game> m_game;
-		int m_tsarIndex;
+		std::shared_ptr<WSAManager> wsaManager;
+		Socket listening;
 
-		std::thread m_masterThread;
-		std::vector<std::thread> m_sendClientThreads;
-		std::vector<std::thread> m_receiveClientThreads;
+		std::string settingsFilepath;
+		std::unique_ptr<Game> game;
+		Interface& userInterface;
 
-		Interface& m_userInterface;
+		std::vector<std::unique_ptr<Client>> clients;
+		std::thread masterThread;
+		std::vector<std::thread> sendClientThreads;
+		std::vector<std::thread> receiveClientThreads;
 
-		bool m_doneGenerating;
-		std::condition_variable m_dataGenerated;
-		std::mutex m_dataGeneratedMutex;
+		std::map<int, std::pair<int, std::vector<std::string>>> playerStatementCardChoices;
+		int tsarChoiceIndex;
 
-		std::atomic<int> m_dataSentCounter;
-		std::condition_variable m_dataSent;
-		std::mutex m_dataSentMutex;
+		bool doneGenerating;
+		std::condition_variable doneGeneratingCvar;
+		std::mutex doneGeneratingMutex;
 
-		std::atomic<int> m_receivedAnswerChoicesCounter;
-		std::condition_variable m_receivedAnswerChoices;
-		std::mutex m_receivedAnswerChoicesMutex;
+		std::atomic<int> dataSentCounter;
+		std::condition_variable dataSentCvar;
+		std::mutex dataSentMutex;
 
-		bool m_shuffledAnswers;
-		std::condition_variable m_answersShuffled;
-		std::mutex m_answersShuffledMutex;
+		std::atomic<int> receivedStatementCardChoicesCounter;
+		std::condition_variable receivedStatementCardChoicesCvar;
+		std::mutex receivedStatementCardChoicesMutex;
 
-		std::atomic<int> m_sentAnswerChoicesCounter;
-		std::condition_variable m_sentAnswerChoices;
-		std::mutex m_sentAnswerChoicesMutex;
+		bool shuffledStatementCards;
+		std::condition_variable shuffledStatementCardsCvar;
+		std::mutex shuffledStatementCardsMutex;
 
-		bool m_receivedTsarChoice;
-		std::condition_variable m_tsarChoiceReceived;
-		std::mutex m_tsarChoiceReceivedMutex;
+		std::atomic<int> sentStatementCardChoicesCounter;
+		std::condition_variable sentStatementCardChoicesCvar;
+		std::mutex sentStatementCardChoicesMutex;
 
-		std::atomic<int> m_sentTsarChoiceCounter;
-		std::condition_variable m_tsarChoiceSent;
-		std::mutex m_tsarChoiceSentMutex;
+		bool receivedTsarStatementCard;
+		std::condition_variable receivedTsarStatementCardCvar;
+		std::mutex receivedTsarStatementCardMutex;
 
-		std::atomic<int> m_sentServerConfirmationCounter;
-		std::condition_variable m_serverConfirmationSent;
-		std::mutex m_serverConfirmationMutex;
+		std::atomic<int> sentTsarStatementCardChoiceCounter;
+		std::condition_variable sentTsarStatementCardChoiceCvar;
+		std::mutex sentTsarStatementCardChoiceMutex;
 
-		std::atomic<int> m_receivedNextRoundConfirmationCounter;
-		std::condition_variable m_receivedNextRoundConfirmation;
-		std::mutex m_receivedNextRoundConfirmationMutex;
+		std::atomic<int> sentServerConfirmationCounter;
+		std::condition_variable sentServerConfirmationCvar;
+		std::mutex sentServerConfirmationMutex;
 
-		bool m_resetFlags;
-		std::condition_variable m_flagsReset;
-		std::mutex m_flagsResetMutex;
+		std::atomic<int> receivedNextRoundConfirmationCounter;
+		std::condition_variable receivedNextRoundConfirmationCvar;
+		std::mutex receivedNextRoundConfirmationMutex;
+
+		bool resetFlags;
+		std::condition_variable resetFlagsCvar;
+		std::mutex resetFlagsMutex;
 };

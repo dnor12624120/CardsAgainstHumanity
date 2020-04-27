@@ -22,9 +22,9 @@ class Command
 
 		void operator()(const std::vector<std::string>& arguments);
 
-		inline int getNumberOfArguments() const { return m_numberOfArguments; }
+		inline int getNumberOfArguments() const { return numberOfArguments; }
 	private:
-		InterfaceCommand m_command;
-		std::string m_commandName;
-		int m_numberOfArguments;
+		InterfaceCommand command;
+		std::string commandName;
+		int numberOfArguments;
 };
